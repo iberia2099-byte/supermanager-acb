@@ -1,0 +1,38 @@
+<!doctype html><html lang="es"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#111827"><title>SuperManager ACB</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f3f4f6;color:#111827;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header{background:#111827;color:#fff;padding:18px;position:sticky;top:0;z-index:5}h1{margin:0;font-size:22px}.sub{opacity:.7;font-size:13px}
+main{max-width:650px;margin:auto;padding:14px 14px 80px}.card{background:#fff;border-radius:18px;padding:16px;margin:10px 0;box-shadow:0 2px 10px #0001}
+button{border:0;border-radius:13px;padding:13px 16px;font-weight:750;font-size:15px;background:#111827;color:#fff;width:100%;margin-top:10px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.metric{background:#f9fafb;border-radius:13px;padding:12px}.label{font-size:12px;color:#6b7280}.value{font-weight:750;margin-top:4px}
+.player{display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid #eee}.player:last-child{border:0}.name{font-weight:650}.meta{font-size:12px;color:#6b7280}.price{font-weight:700}
+.status{padding:6px 9px;border-radius:99px;background:#dcfce7;color:#166534;font-size:12px;font-weight:700}
+.error{background:#fee2e2;color:#991b1b}.muted{color:#6b7280;font-size:12px}
+</style></head><body>
+<header><h1>🏀 SuperManager ACB</h1><div class="sub">Jornada <span id="j">-</span> · <span id="n">-</span> jugadores</div></header>
+<main>
+<div class="card"><div style="display:flex;justify-content:space-between"><b>Datos del mercado</b><span id="st" class="status">LISTO</span></div>
+<button onclick="refresh()">🔄 Actualizar mercado real</button><div id="msg" class="muted" style="margin-top:10px">Pulsa actualizar para consultar El Rincón desde el servidor.</div></div>
+<div class="card"><b>📊 Mercado actual</b><div id="list" style="margin-top:8px"><div class="muted">Sin datos cargados.</div></div></div>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+async function load(){
+ try{const r=await fetch('/api/players');const d=await r.json();render(d)}
+ catch(e){$('msg').textContent='No se pudo conectar con el servidor.'}
+}
+function render(d){
+ $('j').textContent=d.jornada??'-';$('n').textContent=d.players.length;
+ $('list').innerHTML=d.players.slice(0,30).map(p=>`<div class="player"><div><div class="name">${esc(p.name)}</div><div class="meta">${p.position} · ${esc(p.team||'')} · +15 ${p.sm_plus15??'-'}</div></div><div class="price">${p.price?.toLocaleString('es-ES')??'-'} €</div></div>`).join('');
+}
+async function refresh(){
+ $('st').textContent='ACTUALIZANDO';$('st').className='status';$('msg').textContent='Consultando El Rincón y validando el universo...';
+ try{const r=await fetch('/api/refresh',{method:'POST'});const d=await r.json();if(!r.ok)throw Error(d.detail||'Error');
+ render(d);$('st').textContent='ACTUAL';$('msg').textContent=`J${d.jornada}: ${d.players} jugadores guardados en el histórico.`;
+ }catch(e){$('st').textContent='ERROR';$('st').className='status error';$('msg').textContent=e.message}
+}
+function esc(x){return String(x).replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]))}
+load();
+</script></body></html>
