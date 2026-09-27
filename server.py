@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 from pathlib import Path
 import requests, re, sqlite3, json, datetime
 
@@ -36,8 +37,6 @@ def get_soup(url, params=None):
     return BeautifulSoup(r.text, "html.parser")
 
 def find_table(soup, required_terms):
-    """Busca la tabla cuyas cabeceras <th> contienen TODOS los required_terms (case-insensitive).
-    Igual que hacía el extractor original del Broker: no depende de posiciones fijas."""
     for t in soup.find_all("table"):
         hs = [clean(x.get_text(" ", strip=True)) for x in t.find_all("th")]
         joined = " | ".join(hs).lower()
@@ -68,6 +67,10 @@ def init_db():
     con.execute("""CREATE TABLE IF NOT EXISTS calendario(
       team TEXT, jornada INTEGER, rival TEXT, home INTEGER,
       UNIQUE(team, jornada))""")
+    # Bajas marcadas a mano (no depende de snapshot: persiste hasta que la quites)
+    con.execute("""CREATE TABLE IF NOT EXISTS bajas_manual(
+      name TEXT, team TEXT, baja INTEGER DEFAULT 0, motivo TEXT, updated_at TEXT,
+      PRIMARY KEY(name, team))""")
     con.commit(); con.close()
 
 init_db()
@@ -111,8 +114,6 @@ def parse_broker_rows(soup):
     return rows
 
 def extract_cupo_map():
-    """cupo=0 Nacional, cupo=1 Comunitario, cupo=2 Extracom (JFL/COT/EXT).
-    Hace 3 peticiones filtradas y etiqueta cada jugador según en qué subconjunto aparece."""
     labels = {0: "JFL", 1: "COT", 2: "EXT"}
     cupo_map = {}
     for code, label in labels.items():
@@ -129,6 +130,8 @@ def extract_broker():
     soup = get_soup(BROKER_URL)
     text = clean(soup.get_text(" ", strip=True))
     jm = re.search(r"Jornada\s+(\d+)", text, re.I)
+    if jm is None:
+        jm = re.search(r"\bJ(\d+)\b", text)
     jornada = int(jm.group(1)) if jm else None
     rows = parse_broker_rows(soup)
     if len(rows) < 100:
@@ -187,7 +190,6 @@ def extract_valoracion(snapshot_id):
 # ---------- extractor: Calendario ----------
 
 def parse_matchup_cell(text):
-    """'vs RMA' -> (rival='RMA', home=True); '@ BAS' -> (rival='BAS', home=False)"""
     text = clean(text)
     home = text.startswith("vs")
     m = re.search(r"[A-Z]{2,4}", text)
@@ -198,7 +200,6 @@ def extract_calendario():
     soup = get_soup(CALENDARIO_URL)
     target, headers = find_table(soup, ["equipo"])
     if target is None:
-        # algunos sitios usan "jornada" como cabecera principal en vez de "equipo"
         target, headers = find_table(soup, ["jornada"])
     if target is None:
         raise RuntimeError("No se encontró la tabla de Calendario. La web puede haber cambiado.")
@@ -276,9 +277,11 @@ def players():
         con.close(); return {"jornada": None, "players": []}
     rows = con.execute("""SELECT p.name,p.position,p.team,p.price,p.cupo,
                                   p.sm_minus15,p.sm_zero,p.sm_plus15,p.max_rise,p.next_games,
-                                  v.media as valoracion_media, v.pj as valoracion_pj
+                                  v.media as valoracion_media, v.pj as valoracion_pj,
+                                  COALESCE(b.baja,0) as de_baja, b.motivo as baja_motivo
                            FROM players p
                            LEFT JOIN valoracion v ON v.snapshot_id=p.snapshot_id AND v.name=p.name AND v.team=p.team
+                           LEFT JOIN bajas_manual b ON b.name=p.name AND b.team=p.team
                            WHERE p.snapshot_id=? ORDER BY p.price DESC""", (s["id"],)).fetchall()
     con.close()
     return {"jornada": s["jornada"], "players": [dict(x) for x in rows]}
@@ -293,6 +296,30 @@ def calendario(team: str | None = None):
     con.close()
     return {"fixtures": [dict(x) for x in rows]}
 
+class BajaInput(BaseModel):
+    name: str
+    team: str
+    baja: bool
+    motivo: str | None = None
+
+@app.post("/api/bajas")
+def set_baja(b: BajaInput):
+    con = sqlite3.connect(DB)
+    con.execute("""INSERT INTO bajas_manual(name,team,baja,motivo,updated_at) VALUES(?,?,?,?,?)
+                   ON CONFLICT(name,team) DO UPDATE SET baja=excluded.baja, motivo=excluded.motivo, updated_at=excluded.updated_at""",
+                (b.name, b.team, 1 if b.baja else 0, b.motivo,
+                 datetime.datetime.now(datetime.timezone.utc).isoformat()))
+    con.commit(); con.close()
+    return {"ok": True, "name": b.name, "team": b.team, "baja": b.baja}
+
+@app.get("/api/bajas")
+def get_bajas():
+    con = sqlite3.connect(DB); con.row_factory = sqlite3.Row
+    rows = con.execute("SELECT name,team,motivo,updated_at FROM bajas_manual WHERE baja=1").fetchall()
+    con.close()
+    return {"bajas": [dict(x) for x in rows]}
+
 @app.get("/")
 def index():
     return FileResponse(APP / "index.html")
+            
