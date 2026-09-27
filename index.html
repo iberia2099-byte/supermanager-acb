@@ -30,7 +30,7 @@ function render(d){
 async function refresh(){
  $('st').textContent='ACTUALIZANDO';$('st').className='status';$('msg').textContent='Consultando El Rincón y validando el universo...';
  try{const r=await fetch('/api/refresh',{method:'POST'});const d=await r.json();if(!r.ok)throw Error(d.detail||'Error');
- render({jornada:d.jornada,players:d.rows});$('st').textContent='ACTUAL';}: ${d.players} jugadores guardados en el histórico.`;
+ render({jornada:d.jornada,players:d.rows});$('st').textContent='ACTUAL';$('msg').textContent=`J${d.jornada}: ${d.rows.length} jugadores guardados en el histórico.`;
  }catch(e){$('st').textContent='ERROR';$('st').className='status error';$('msg').textContent=e.message}
 }
 function esc(x){return String(x).replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]))}
