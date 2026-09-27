@@ -47,9 +47,9 @@ def find_table(soup, required_terms):
 TEAM_CODE_RE = re.compile(r"/equipo/([A-Z]{2,4})\b")
 
 def _team_code_from_row(tr):
-    """El código de equipo casi nunca es texto suelto en la celda: suele ir en el
+    """El codigo de equipo casi nunca es texto suelto en la celda: suele ir en el
     href de un enlace a /equipo/CODIGO o en el alt/title de su logo. Probamos eso
-    primero (igual que en Calendario) y solo caemos al texto plano como último recurso."""
+    primero (igual que en Calendario) y solo caemos al texto plano como ultimo recurso."""
     for a in tr.find_all("a", href=True):
         m = TEAM_CODE_RE.search(a["href"])
         if m:
@@ -101,10 +101,9 @@ init_db()
 def parse_broker_rows(soup):
     target, headers = find_table(soup, ["jugador", "precio", "subida"])
     if target is None:
-        raise RuntimeError("No se encontró la tabla Broker. La web puede haber cambiado.")
+        raise RuntimeError("No se encontro la tabla Broker. La web puede haber cambiado.")
     ip, iprice = col_index(headers, "jugador"), col_index(headers, "precio")
-    im15 = col_index(headers, "−15")
-    if im15 is None: im15 = col_index(headers, "-15")
+    im15 = col_index(headers, "-15")
     iz = col_index(headers, "0")
     ip15 = col_index(headers, "+15")
     ir = col_index(headers, "subida")
@@ -153,7 +152,7 @@ def extract_broker():
     jornada = int(jm.group(1)) if jm else None
     rows = parse_broker_rows(soup)
     if len(rows) < 100:
-        raise RuntimeError(f"Solo se extrajeron {len(rows)} jugadores. Actualización abortada.")
+        raise RuntimeError(f"Solo se extrajeron {len(rows)} jugadores. Actualizacion abortada.")
     cupo_map = extract_cupo_map()
     for r in rows:
         r["cupo"] = cupo_map.get((r["name"], r["team"]))
@@ -167,13 +166,13 @@ def extract_broker():
     con.commit(); con.close()
     return {"jornada": jornada, "players": len(rows), "rows": rows}
 
-# ---------- extractor: Valoración ----------
+# ---------- extractor: Valoracion ----------
 
 def extract_valoracion(snapshot_id):
     soup = get_soup(VALORACION_URL)
     target, headers = find_table(soup, ["jugador"])
     if target is None:
-        raise RuntimeError("No se encontró la tabla de Valoración. La web puede haber cambiado.")
+        raise RuntimeError("No se encontro la tabla de Valoracion. La web puede haber cambiado.")
     ip = col_index(headers, "jugador")
     # "Media SM" = media de toda la temporada; "Forma" = rendimiento reciente (lo usamos para "reciente")
     imedia = col_index(headers, "media", "sm")
@@ -203,7 +202,7 @@ def extract_valoracion(snapshot_id):
             "raw": raw
         })
     if not rows:
-        raise RuntimeError("Valoración: 0 filas extraídas, revisar cabeceras de la tabla.")
+        raise RuntimeError("Valoracion: 0 filas extraidas, revisar cabeceras de la tabla.")
     con = sqlite3.connect(DB); cur = con.cursor()
     cur.executemany("INSERT INTO valoracion VALUES(?,?,?,?,?,?,?,?,?)",
         [(snapshot_id, x["name"], x["team"], x["media"], x["pj"], x["forma"], x["rent"], x["reg"],
@@ -224,7 +223,7 @@ def extract_calendario():
     """Estructura real (no es una tabla): cada jornada es un bloque con id="j-N"
     (ancla de los botones 1..34), y dentro cada partido tiene exactamente 2 enlaces
     a /smgr/equipo/CODIGO: el primero es el local, el segundo el visitante.
-    Buscamos por href, no por texto/clases, para depender lo menos posible del diseño."""
+    Buscamos por href, no por texto/clases, para depender lo menos posible del diseno."""
     soup = get_soup(CALENDARIO_URL)
     rows_out = []
     jornada_blocks = [el for el in soup.find_all(id=re.compile(r"^j-\d+$"))]
@@ -247,7 +246,7 @@ def extract_calendario():
             rows_out.append({"team": home_team, "jornada": jornada, "rival": away_team, "home": True})
             rows_out.append({"team": away_team, "jornada": jornada, "rival": home_team, "home": False})
     if not rows_out:
-        raise RuntimeError("Calendario: 0 filas extraídas (bloques j-N encontrados pero sin enlaces de equipo dentro).")
+        raise RuntimeError("Calendario: 0 filas extraidas (bloques j-N encontrados pero sin enlaces de equipo dentro).")
     con = sqlite3.connect(DB); cur = con.cursor()
     cur.executemany("INSERT OR REPLACE INTO calendario VALUES(?,?,?,?)",
         [(x["team"], x["jornada"], x["rival"], 1 if x["home"] else 0) for x in rows_out])
@@ -310,8 +309,8 @@ def players():
 
 def _team_strength(snapshot_id):
     """Media de 'media SM' por equipo, como proxy de la fuerza del rival.
-    (Cuando aún no se ha jugado ningún partido, todo esto será None/liga vacía;
-    en cuanto haya PJ>0 empezará a rellenarse solo.)"""
+    (Cuando aun no se ha jugado ningun partido, todo esto sera None/liga vacia;
+    en cuanto haya PJ>0 empezara a rellenarse solo.)"""
     con = sqlite3.connect(DB)
     rows = con.execute("""SELECT team, AVG(media) FROM valoracion
                            WHERE snapshot_id=? AND media IS NOT NULL AND team!='' GROUP BY team""",
@@ -330,10 +329,10 @@ def _next_rival_map(jornada):
     return {team: (rival, bool(home)) for team, rival, home in rows}
 
 def compute_proyeccion(snapshot_id, jornada):
-    """proyección = (forma reciente, o media de temporada si no hay forma aún)
-       × factor de dificultad del rival (relativo a la media de la liga)
-       × pequeño ajuste local/visitante.
-       Bajas manuales -> proyección 0 (pero el jugador se sigue devolviendo, visible)."""
+    """proyeccion = (forma reciente, o media de temporada si no hay forma aun)
+       x factor de dificultad del rival (relativo a la media de la liga)
+       x pequeno ajuste local/visitante.
+       Bajas manuales -> proyeccion 0 (pero el jugador se sigue devolviendo, visible)."""
     team_avg, league_avg = _team_strength(snapshot_id)
     rival_map = _next_rival_map(jornada)
     con = sqlite3.connect(DB); con.row_factory = sqlite3.Row
@@ -355,7 +354,7 @@ def compute_proyeccion(snapshot_id, jornada):
             base = d["forma"] if d["forma"] is not None else d["media"]
             if base is None:
                 d["proyeccion"] = None
-                d["proyeccion_detalle"] = "sin datos todavía (PJ=0)"
+                d["proyeccion_detalle"] = "sin datos todavia (PJ=0)"
             else:
                 rival, home = rival_map.get(d["team"], (None, None))
                 factor = 1.0
@@ -364,7 +363,7 @@ def compute_proyeccion(snapshot_id, jornada):
                     factor = max(0.85, min(1.15, factor))
                 home_factor = 1.03 if home is True else (0.97 if home is False else 1.0)
                 d["proyeccion"] = round(base * factor * home_factor, 2)
-                d["proyeccion_detalle"] = f"base {base} × rival({rival or '-'}) {round(factor,3)} × {'local' if home else 'visitante' if home is False else '-'} {home_factor}"
+                d["proyeccion_detalle"] = f"base {base} x rival({rival or '-'}) {round(factor,3)} x {'local' if home else 'visitante' if home is False else '-'} {home_factor}"
         out.append(d)
     return out
 
@@ -382,8 +381,8 @@ def proyeccion():
 REGLAS = dict(presupuesto=5_000_000, n_bases=2, n_aleros=4, n_pivots=4, max_ext=2, min_jfl=4)
 
 def _resolver_once(candidates, forbidden_sets, reglas):
-    """Un intento de programación lineal entera: elige exactamente 2B+4A+4P,
-    presupuesto <= 5M, EXT<=2, JFL>=4, maximizando la proyección total.
+    """Un intento de programacion lineal entera: elige exactamente 2B+4A+4P,
+    presupuesto <= 5M, EXT<=2, JFL>=4, maximizando la proyeccion total.
     forbidden_sets: soluciones anteriores que no puede repetir exactamente (para dar Equipo 2, 3...)."""
     import pulp
     prob = pulp.LpProblem("supermanager", pulp.LpMaximize)
@@ -406,21 +405,21 @@ def _resolver_once(candidates, forbidden_sets, reglas):
 @app.get("/api/optimizador")
 def optimizador(n: int = 3, presupuesto: int = 5_000_000):
     """Optimizador global: sobre TODO el mercado (no depende de tu plantilla actual).
-    Devuelve hasta n combinaciones válidas y distintas entre sí, ordenadas por proyección total."""
+    Devuelve hasta n combinaciones validas y distintas entre si, ordenadas por proyeccion total."""
     con = sqlite3.connect(DB); con.row_factory = sqlite3.Row
     s = con.execute("SELECT id,jornada FROM snapshots ORDER BY id DESC LIMIT 1").fetchone()
     con.close()
     if not s:
-        raise HTTPException(400, "No hay datos de mercado todavía, ejecuta /api/refresh_all primero.")
+        raise HTTPException(400, "No hay datos de mercado todavia, ejecuta /api/refresh_all primero.")
     try:
         import pulp  # noqa: F401
     except ImportError:
-        raise HTTPException(500, "Falta la librería 'pulp' en requirements.txt (necesaria para el optimizador).")
+        raise HTTPException(500, "Falta la libreria 'pulp' en requirements.txt (necesaria para el optimizador).")
     players = compute_proyeccion(s["id"], s["jornada"])
     candidates = [p for p in players
                   if not p["de_baja"] and p["position"] in ("B", "A", "P") and p["price"] is not None]
     if len(candidates) < 10:
-        raise HTTPException(400, "No hay suficientes jugadores válidos para formar un equipo.")
+        raise HTTPException(400, "No hay suficientes jugadores validos para formar un equipo.")
     reglas = dict(REGLAS); reglas["presupuesto"] = presupuesto
     equipos = []
     forbidden = []
@@ -436,4 +435,4 @@ def optimizador(n: int = 3, presupuesto: int = 5_000_000):
             "proyeccion_total": round(sum((j["proyeccion"] or 0) for j in jugadores), 2),
         })
     if not equipos:
-        raise HTTPException(400, "No se encontr
+        raise HTTPException(400, "No se encontro ninguna combinacion valida con las reglas actuales: 
