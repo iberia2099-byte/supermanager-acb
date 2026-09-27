@@ -286,6 +286,29 @@ def players():
     con.close()
     return {"jornada": s["jornada"], "players": [dict(x) for x in rows]}
 
+@app.get("/api/debug/valoracion")
+def debug_valoracion(name: str | None = None, limit: int = 5):
+    """Endpoint temporal: para ver qué columnas trae realmente valoracion.php
+    (así sabemos si hay historial partido a partido o solo media de temporada)."""
+    con = sqlite3.connect(DB); con.row_factory = sqlite3.Row
+    sid = con.execute("SELECT id FROM snapshots ORDER BY id DESC LIMIT 1").fetchone()
+    if not sid:
+        con.close(); return {"error": "no hay snapshot todavía, ejecuta /api/refresh_all primero"}
+    sid = sid["id"]
+    if name:
+        rows = con.execute("SELECT name,team,media,pj,raw_json FROM valoracion WHERE snapshot_id=? AND name LIKE ?",
+                            (sid, f"%{name}%")).fetchall()
+    else:
+        rows = con.execute("SELECT name,team,media,pj,raw_json FROM valoracion WHERE snapshot_id=? LIMIT ?",
+                            (sid, limit)).fetchall()
+    con.close()
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["raw_json"] = json.loads(d["raw_json"]) if d["raw_json"] else None
+        out.append(d)
+    return {"count": len(out), "rows": out}
+
 @app.get("/api/calendario")
 def calendario(team: str | None = None):
     con = sqlite3.connect(DB); con.row_factory = sqlite3.Row
