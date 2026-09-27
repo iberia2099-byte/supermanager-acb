@@ -44,6 +44,26 @@ def find_table(soup, required_terms):
             return t, hs
     return None, []
 
+TEAM_CODE_RE = re.compile(r"/equipo/([A-Z]{2,4})\b")
+
+def _team_code_from_row(tr):
+    """El código de equipo casi nunca es texto suelto en la celda: suele ir en el
+    href de un enlace a /equipo/CODIGO o en el alt/title de su logo. Probamos eso
+    primero (igual que en Calendario) y solo caemos al texto plano como último recurso."""
+    for a in tr.find_all("a", href=True):
+        m = TEAM_CODE_RE.search(a["href"])
+        if m:
+            return m.group(1)
+    for img in tr.find_all("img"):
+        for attr in ("alt", "title"):
+            v = img.get(attr, "")
+            if re.fullmatch(r"[A-Z]{2,4}", v.strip()):
+                return v.strip()
+            m = TEAM_CODE_RE.search(v)
+            if m:
+                return m.group(1)
+    return None
+
 def col_index(headers, *terms):
     for i, h in enumerate(headers):
         x = h.lower()
@@ -99,10 +119,7 @@ def parse_broker_rows(soup):
         if not m:
             continue
         pos = m.group(1); name = clean(first[m.end():])
-        team = ""
-        for v in vals[:4]:
-            if re.fullmatch(r"[A-Z]{2,4}", v):
-                team = v; break
+        team = _team_code_from_row(tr) or ""
         rows.append({
             "name": name, "position": pos, "team": team,
             "price": money(vals[iprice]),
@@ -175,10 +192,7 @@ def extract_valoracion(snapshot_id):
         first = vals[ip]
         m = re.match(r"^(B|A|P)\b", first)
         name = clean(first[m.end():]) if m else first
-        team = ""
-        for v in vals[:4]:
-            if re.fullmatch(r"[A-Z]{2,4}", v):
-                team = v; break
+        team = _team_code_from_row(tr) or ""
         raw = {headers[i] if i < len(headers) else f"col{i}": v for i, v in enumerate(vals)}
         def _num(idx):
             return number(vals[idx]) if idx is not None and idx < len(vals) else None
@@ -424,4 +438,4 @@ def get_bajas():
 @app.get("/")
 def index():
     return FileResponse(APP / "index.html")
-        
+    
