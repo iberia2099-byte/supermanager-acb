@@ -63,7 +63,8 @@ def init_db():
       sm_minus15 REAL, sm_zero REAL, sm_plus15 REAL, max_rise INTEGER,
       next_games TEXT)""")
     con.execute("""CREATE TABLE IF NOT EXISTS valoracion(
-      snapshot_id INTEGER, name TEXT, team TEXT, media REAL, pj INTEGER, raw_json TEXT)""")
+      snapshot_id INTEGER, name TEXT, team TEXT, media REAL, pj INTEGER,
+      forma REAL, rent REAL, reg REAL, raw_json TEXT)""")
     con.execute("""CREATE TABLE IF NOT EXISTS calendario(
       team TEXT, jornada INTEGER, rival TEXT, home INTEGER,
       UNIQUE(team, jornada))""")
@@ -157,8 +158,14 @@ def extract_valoracion(snapshot_id):
     if target is None:
         raise RuntimeError("No se encontró la tabla de Valoración. La web puede haber cambiado.")
     ip = col_index(headers, "jugador")
-    imedia = col_index(headers, "media")
+    # "Media SM" = media de toda la temporada; "Forma" = rendimiento reciente (lo usamos para "reciente")
+    imedia = col_index(headers, "media", "sm")
+    if imedia is None:
+        imedia = col_index(headers, "media")
     ipj = col_index(headers, "pj")
+    iforma = col_index(headers, "forma")
+    irent = col_index(headers, "rent")
+    ireg = col_index(headers, "reg")
     rows = []
     for tr in target.find_all("tr"):
         c = tr.find_all("td")
@@ -173,60 +180,60 @@ def extract_valoracion(snapshot_id):
             if re.fullmatch(r"[A-Z]{2,4}", v):
                 team = v; break
         raw = {headers[i] if i < len(headers) else f"col{i}": v for i, v in enumerate(vals)}
+        def _num(idx):
+            return number(vals[idx]) if idx is not None and idx < len(vals) else None
         rows.append({
             "name": name, "team": team,
-            "media": number(vals[imedia]) if imedia is not None and imedia < len(vals) else None,
-            "pj": int(number(vals[ipj])) if ipj is not None and ipj < len(vals) and number(vals[ipj]) else None,
+            "media": _num(imedia), "pj": int(_num(ipj)) if _num(ipj) else None,
+            "forma": _num(iforma), "rent": _num(irent), "reg": _num(ireg),
             "raw": raw
         })
     if not rows:
         raise RuntimeError("Valoración: 0 filas extraídas, revisar cabeceras de la tabla.")
     con = sqlite3.connect(DB); cur = con.cursor()
-    cur.executemany("INSERT INTO valoracion VALUES(?,?,?,?,?,?)",
-        [(snapshot_id, x["name"], x["team"], x["media"], x["pj"], json.dumps(x["raw"], ensure_ascii=False)) for x in rows])
+    cur.executemany("INSERT INTO valoracion VALUES(?,?,?,?,?,?,?,?,?)",
+        [(snapshot_id, x["name"], x["team"], x["media"], x["pj"], x["forma"], x["rent"], x["reg"],
+          json.dumps(x["raw"], ensure_ascii=False)) for x in rows])
     con.commit(); con.close()
     return {"players": len(rows)}
 
 # ---------- extractor: Calendario ----------
 
-def parse_matchup_cell(text):
-    text = clean(text)
-    home = text.startswith("vs")
-    m = re.search(r"[A-Z]{2,4}", text)
-    rival = m.group(0) if m else None
-    return rival, home
+TEAM_HREF_RE = re.compile(r"/equipo/([A-Z]{2,4})\b")
+
+def _team_code_from_link(a):
+    href = a.get("href", "")
+    m = TEAM_HREF_RE.search(href)
+    return m.group(1) if m else None
 
 def extract_calendario():
+    """Estructura real (no es una tabla): cada jornada es un bloque con id="j-N"
+    (ancla de los botones 1..34), y dentro cada partido tiene exactamente 2 enlaces
+    a /smgr/equipo/CODIGO: el primero es el local, el segundo el visitante.
+    Buscamos por href, no por texto/clases, para depender lo menos posible del diseño."""
     soup = get_soup(CALENDARIO_URL)
-    target, headers = find_table(soup, ["equipo"])
-    if target is None:
-        target, headers = find_table(soup, ["jornada"])
-    if target is None:
-        raise RuntimeError("No se encontró la tabla de Calendario. La web puede haber cambiado.")
-    jornada_cols = []
-    for i, h in enumerate(headers):
-        jm = re.search(r"(\d+)", h)
-        if jm and ("j" in h.lower() or "jornada" in h.lower()):
-            jornada_cols.append((i, int(jm.group(1))))
     rows_out = []
-    for tr in target.find_all("tr"):
-        c = tr.find_all(["td", "th"])
-        vals = [clean(x.get_text(" ", strip=True)) for x in c]
-        if not vals:
+    jornada_blocks = [el for el in soup.find_all(id=re.compile(r"^j-\d+$"))]
+    if not jornada_blocks:
+        # Fallback: buscar cabeceras "Jornada N" y tomar todo hasta la siguiente cabecera
+        headers = soup.find_all(string=re.compile(r"^Jornada\s+\d+$"))
+        raise RuntimeError("Calendario: no se encontraron bloques por jornada (id=j-N). "
+                            f"Cabeceras 'Jornada N' encontradas por texto: {len(headers)}. La web puede haber cambiado.")
+    for block in jornada_blocks:
+        jm = re.search(r"j-(\d+)", block.get("id", ""))
+        if not jm:
             continue
-        team = None
-        for v in vals[:2]:
-            if re.fullmatch(r"[A-Z]{2,4}", v):
-                team = v; break
-        if not team:
-            continue
-        for i, jornada in jornada_cols:
-            if i < len(vals):
-                rival, home = parse_matchup_cell(vals[i])
-                if rival:
-                    rows_out.append({"team": team, "jornada": jornada, "rival": rival, "home": home})
+        jornada = int(jm.group(1))
+        team_links = [a for a in block.find_all("a", href=TEAM_HREF_RE)]
+        codes = [_team_code_from_link(a) for a in team_links]
+        codes = [c for c in codes if c]
+        # Se agrupan de 2 en 2: (local, visitante) por partido, en el orden en que aparecen
+        for i in range(0, len(codes) - 1, 2):
+            home_team, away_team = codes[i], codes[i + 1]
+            rows_out.append({"team": home_team, "jornada": jornada, "rival": away_team, "home": True})
+            rows_out.append({"team": away_team, "jornada": jornada, "rival": home_team, "home": False})
     if not rows_out:
-        raise RuntimeError("Calendario: 0 filas extraídas, revisar estructura de columnas por jornada.")
+        raise RuntimeError("Calendario: 0 filas extraídas (bloques j-N encontrados pero sin enlaces de equipo dentro).")
     con = sqlite3.connect(DB); cur = con.cursor()
     cur.executemany("INSERT OR REPLACE INTO calendario VALUES(?,?,?,?)",
         [(x["team"], x["jornada"], x["rival"], 1 if x["home"] else 0) for x in rows_out])
@@ -278,6 +285,7 @@ def players():
     rows = con.execute("""SELECT p.name,p.position,p.team,p.price,p.cupo,
                                   p.sm_minus15,p.sm_zero,p.sm_plus15,p.max_rise,p.next_games,
                                   v.media as valoracion_media, v.pj as valoracion_pj,
+                                  v.forma as valoracion_forma, v.rent as valoracion_rent, v.reg as valoracion_reg,
                                   COALESCE(b.baja,0) as de_baja, b.motivo as baja_motivo
                            FROM players p
                            LEFT JOIN valoracion v ON v.snapshot_id=p.snapshot_id AND v.name=p.name AND v.team=p.team
@@ -285,6 +293,77 @@ def players():
                            WHERE p.snapshot_id=? ORDER BY p.price DESC""", (s["id"],)).fetchall()
     con.close()
     return {"jornada": s["jornada"], "players": [dict(x) for x in rows]}
+
+def _team_strength(snapshot_id):
+    """Media de 'media SM' por equipo, como proxy de la fuerza del rival.
+    (Cuando aún no se ha jugado ningún partido, todo esto será None/liga vacía;
+    en cuanto haya PJ>0 empezará a rellenarse solo.)"""
+    con = sqlite3.connect(DB)
+    rows = con.execute("""SELECT team, AVG(media) FROM valoracion
+                           WHERE snapshot_id=? AND media IS NOT NULL AND team!='' GROUP BY team""",
+                        (snapshot_id,)).fetchall()
+    con.close()
+    team_avg = {t: m for t, m in rows if m is not None}
+    league_avg = sum(team_avg.values()) / len(team_avg) if team_avg else None
+    return team_avg, league_avg
+
+def _next_rival_map(jornada):
+    if jornada is None:
+        return {}
+    con = sqlite3.connect(DB)
+    rows = con.execute("SELECT team,rival,home FROM calendario WHERE jornada=?", (jornada,)).fetchall()
+    con.close()
+    return {team: (rival, bool(home)) for team, rival, home in rows}
+
+def compute_proyeccion(snapshot_id, jornada):
+    """proyección = (forma reciente, o media de temporada si no hay forma aún)
+       × factor de dificultad del rival (relativo a la media de la liga)
+       × pequeño ajuste local/visitante.
+       Bajas manuales -> proyección 0 (pero el jugador se sigue devolviendo, visible)."""
+    team_avg, league_avg = _team_strength(snapshot_id)
+    rival_map = _next_rival_map(jornada)
+    con = sqlite3.connect(DB); con.row_factory = sqlite3.Row
+    rows = con.execute("""SELECT p.name,p.position,p.team,p.price,p.cupo,
+                                  v.media as media, v.forma as forma,
+                                  COALESCE(b.baja,0) as de_baja
+                           FROM players p
+                           LEFT JOIN valoracion v ON v.snapshot_id=p.snapshot_id AND v.name=p.name AND v.team=p.team
+                           LEFT JOIN bajas_manual b ON b.name=p.name AND b.team=p.team
+                           WHERE p.snapshot_id=?""", (snapshot_id,)).fetchall()
+    con.close()
+    out = []
+    for r in rows:
+        d = dict(r)
+        if d["de_baja"]:
+            d["proyeccion"] = 0.0
+            d["proyeccion_detalle"] = "de baja"
+        else:
+            base = d["forma"] if d["forma"] is not None else d["media"]
+            if base is None:
+                d["proyeccion"] = None
+                d["proyeccion_detalle"] = "sin datos todavía (PJ=0)"
+            else:
+                rival, home = rival_map.get(d["team"], (None, None))
+                factor = 1.0
+                if rival and league_avg and team_avg.get(rival):
+                    factor = league_avg / team_avg[rival]
+                    factor = max(0.85, min(1.15, factor))
+                home_factor = 1.03 if home is True else (0.97 if home is False else 1.0)
+                d["proyeccion"] = round(base * factor * home_factor, 2)
+                d["proyeccion_detalle"] = f"base {base} × rival({rival or '-'}) {round(factor,3)} × {'local' if home else 'visitante' if home is False else '-'} {home_factor}"
+        out.append(d)
+    return out
+
+@app.get("/api/proyeccion")
+def proyeccion():
+    con = sqlite3.connect(DB); con.row_factory = sqlite3.Row
+    s = con.execute("SELECT id,jornada FROM snapshots ORDER BY id DESC LIMIT 1").fetchone()
+    con.close()
+    if not s:
+        return {"jornada": None, "players": []}
+    players = compute_proyeccion(s["id"], s["jornada"])
+    players.sort(key=lambda p: (p["proyeccion"] is None, -(p["proyeccion"] or 0)))
+    return {"jornada": s["jornada"], "players": players}
 
 @app.get("/api/debug/valoracion")
 def debug_valoracion(name: str | None = None, limit: int = 5):
@@ -296,10 +375,10 @@ def debug_valoracion(name: str | None = None, limit: int = 5):
         con.close(); return {"error": "no hay snapshot todavía, ejecuta /api/refresh_all primero"}
     sid = sid["id"]
     if name:
-        rows = con.execute("SELECT name,team,media,pj,raw_json FROM valoracion WHERE snapshot_id=? AND name LIKE ?",
+        rows = con.execute("SELECT name,team,media,pj,forma,rent,reg,raw_json FROM valoracion WHERE snapshot_id=? AND name LIKE ?",
                             (sid, f"%{name}%")).fetchall()
     else:
-        rows = con.execute("SELECT name,team,media,pj,raw_json FROM valoracion WHERE snapshot_id=? LIMIT ?",
+        rows = con.execute("SELECT name,team,media,pj,forma,rent,reg,raw_json FROM valoracion WHERE snapshot_id=? LIMIT ?",
                             (sid, limit)).fetchall()
     con.close()
     out = []
@@ -345,4 +424,4 @@ def get_bajas():
 @app.get("/")
 def index():
     return FileResponse(APP / "index.html")
-            
+        
