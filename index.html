@@ -49,9 +49,15 @@ async function toggleBaja(name,team,nuevoValor){
  }catch(e){alert('No se pudo actualizar la baja: '+e.message)}
 }
 async function refresh(){
- $('st').textContent='ACTUALIZANDO';$('st').className='status';$('msg').textContent='Consultando El Rincón y validando el universo...';
- try{const r=await fetch('/api/refresh',{method:'POST'});const d=await r.json();if(!r.ok)throw Error(d.detail||'Error');
- render({jornada:d.jornada,players:d.rows});$('st').textContent='ACTUAL';$('msg').textContent=`J${d.jornada}: ${d.rows.length} jugadores guardados en el histórico.`;
+ $('st').textContent='ACTUALIZANDO';$('st').className='status';$('msg').textContent='Consultando Broker + Valoración + Calendario...';
+ try{
+   const r=await fetch('/api/refresh_all',{method:'POST'});const d=await r.json();if(!r.ok)throw Error(d.detail||'Error');
+   await load();
+   $('st').textContent='ACTUAL';
+   const b=d.broker?`Broker: ${d.broker.players} jugadores (J${d.broker.jornada}).`:'';
+   const v=d.valoracion?` Valoración: ${d.valoracion.players} filas OK.`:d.valoracion_error?` Valoración: ERROR — ${d.valoracion_error}`:'';
+   const c=d.calendario?` Calendario: ${d.calendario.fixtures} partidos OK.`:d.calendario_error?` Calendario: ERROR — ${d.calendario_error}`:'';
+   $('msg').textContent=b+v+c;
  }catch(e){$('st').textContent='ERROR';$('st').className='status error';$('msg').textContent=e.message}
 }
 function esc(x){return String(x).replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]))}
