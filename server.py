@@ -379,63 +379,61 @@ def proyeccion():
     players.sort(key=lambda p: (p["proyeccion"] is None, -(p["proyeccion"] or 0)))
     return {"jornada": s["jornada"], "players": players}
 
-@app.get("/api/debug/valoracion")
-def debug_valoracion(name: str | None = None, limit: int = 5):
-    """Endpoint temporal: para ver qué columnas trae realmente valoracion.php
-    (así sabemos si hay historial partido a partido o solo media de temporada)."""
+REGLAS = dict(presupuesto=5_000_000, n_bases=2, n_aleros=4, n_pivots=4, max_ext=2, min_jfl=4)
+
+def _resolver_once(candidates, forbidden_sets, reglas):
+    """Un intento de programación lineal entera: elige exactamente 2B+4A+4P,
+    presupuesto <= 5M, EXT<=2, JFL>=4, maximizando la proyección total.
+    forbidden_sets: soluciones anteriores que no puede repetir exactamente (para dar Equipo 2, 3...)."""
+    import pulp
+    prob = pulp.LpProblem("supermanager", pulp.LpMaximize)
+    x = {i: pulp.LpVariable(f"x_{i}", cat="Binary") for i in range(len(candidates))}
+    prob += pulp.lpSum(x[i] * (candidates[i]["proyeccion"] or 0) for i in x)
+    prob += pulp.lpSum(x[i] * candidates[i]["price"] for i in x) <= reglas["presupuesto"]
+    prob += pulp.lpSum(x[i] for i in x if candidates[i]["position"] == "B") == reglas["n_bases"]
+    prob += pulp.lpSum(x[i] for i in x if candidates[i]["position"] == "A") == reglas["n_aleros"]
+    prob += pulp.lpSum(x[i] for i in x if candidates[i]["position"] == "P") == reglas["n_pivots"]
+    prob += pulp.lpSum(x[i] for i in x if candidates[i]["cupo"] == "EXT") <= reglas["max_ext"]
+    prob += pulp.lpSum(x[i] for i in x if candidates[i]["cupo"] == "JFL") >= reglas["min_jfl"]
+    for prev in forbidden_sets:
+        prob += pulp.lpSum(x[i] for i in prev) <= len(prev) - 1
+    status = prob.solve(pulp.PULP_CBC_CMD(msg=0))
+    if pulp.LpStatus[status] != "Optimal":
+        return None
+    chosen = [i for i in x if (x[i].value() or 0) > 0.5]
+    return chosen if chosen else None
+
+@app.get("/api/optimizador")
+def optimizador(n: int = 3, presupuesto: int = 5_000_000):
+    """Optimizador global: sobre TODO el mercado (no depende de tu plantilla actual).
+    Devuelve hasta n combinaciones válidas y distintas entre sí, ordenadas por proyección total."""
     con = sqlite3.connect(DB); con.row_factory = sqlite3.Row
-    sid = con.execute("SELECT id FROM snapshots ORDER BY id DESC LIMIT 1").fetchone()
-    if not sid:
-        con.close(); return {"error": "no hay snapshot todavía, ejecuta /api/refresh_all primero"}
-    sid = sid["id"]
-    if name:
-        rows = con.execute("SELECT name,team,media,pj,forma,rent,reg,raw_json FROM valoracion WHERE snapshot_id=? AND name LIKE ?",
-                            (sid, f"%{name}%")).fetchall()
-    else:
-        rows = con.execute("SELECT name,team,media,pj,forma,rent,reg,raw_json FROM valoracion WHERE snapshot_id=? LIMIT ?",
-                            (sid, limit)).fetchall()
+    s = con.execute("SELECT id,jornada FROM snapshots ORDER BY id DESC LIMIT 1").fetchone()
     con.close()
-    out = []
-    for r in rows:
-        d = dict(r)
-        d["raw_json"] = json.loads(d["raw_json"]) if d["raw_json"] else None
-        out.append(d)
-    return {"count": len(out), "rows": out}
-
-@app.get("/api/calendario")
-def calendario(team: str | None = None):
-    con = sqlite3.connect(DB); con.row_factory = sqlite3.Row
-    if team:
-        rows = con.execute("SELECT team,jornada,rival,home FROM calendario WHERE team=? ORDER BY jornada", (team,)).fetchall()
-    else:
-        rows = con.execute("SELECT team,jornada,rival,home FROM calendario ORDER BY team,jornada").fetchall()
-    con.close()
-    return {"fixtures": [dict(x) for x in rows]}
-
-class BajaInput(BaseModel):
-    name: str
-    team: str
-    baja: bool
-    motivo: str | None = None
-
-@app.post("/api/bajas")
-def set_baja(b: BajaInput):
-    con = sqlite3.connect(DB)
-    con.execute("""INSERT INTO bajas_manual(name,team,baja,motivo,updated_at) VALUES(?,?,?,?,?)
-                   ON CONFLICT(name,team) DO UPDATE SET baja=excluded.baja, motivo=excluded.motivo, updated_at=excluded.updated_at""",
-                (b.name, b.team, 1 if b.baja else 0, b.motivo,
-                 datetime.datetime.now(datetime.timezone.utc).isoformat()))
-    con.commit(); con.close()
-    return {"ok": True, "name": b.name, "team": b.team, "baja": b.baja}
-
-@app.get("/api/bajas")
-def get_bajas():
-    con = sqlite3.connect(DB); con.row_factory = sqlite3.Row
-    rows = con.execute("SELECT name,team,motivo,updated_at FROM bajas_manual WHERE baja=1").fetchall()
-    con.close()
-    return {"bajas": [dict(x) for x in rows]}
-
-@app.get("/")
-def index():
-    return FileResponse(APP / "index.html")
-    
+    if not s:
+        raise HTTPException(400, "No hay datos de mercado todavía, ejecuta /api/refresh_all primero.")
+    try:
+        import pulp  # noqa: F401
+    except ImportError:
+        raise HTTPException(500, "Falta la librería 'pulp' en requirements.txt (necesaria para el optimizador).")
+    players = compute_proyeccion(s["id"], s["jornada"])
+    candidates = [p for p in players
+                  if not p["de_baja"] and p["position"] in ("B", "A", "P") and p["price"] is not None]
+    if len(candidates) < 10:
+        raise HTTPException(400, "No hay suficientes jugadores válidos para formar un equipo.")
+    reglas = dict(REGLAS); reglas["presupuesto"] = presupuesto
+    equipos = []
+    forbidden = []
+    for _ in range(max(1, n)):
+        chosen = _resolver_once(candidates, forbidden, reglas)
+        if chosen is None:
+            break
+        forbidden.append(chosen)
+        jugadores = [candidates[i] for i in chosen]
+        equipos.append({
+            "jugadores": jugadores,
+            "coste_total": sum(j["price"] for j in jugadores),
+            "proyeccion_total": round(sum((j["proyeccion"] or 0) for j in jugadores), 2),
+        })
+    if not equipos:
+        raise HTTPException(400, "No se encontr
