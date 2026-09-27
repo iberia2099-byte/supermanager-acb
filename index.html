@@ -7,9 +7,13 @@ header{background:#111827;color:#fff;padding:18px;position:sticky;top:0;z-index:
 main{max-width:650px;margin:auto;padding:14px 14px 80px}.card{background:#fff;border-radius:18px;padding:16px;margin:10px 0;box-shadow:0 2px 10px #0001}
 button{border:0;border-radius:13px;padding:13px 16px;font-weight:750;font-size:15px;background:#111827;color:#fff;width:100%;margin-top:10px}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.metric{background:#f9fafb;border-radius:13px;padding:12px}.label{font-size:12px;color:#6b7280}.value{font-weight:750;margin-top:4px}
-.player{display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid #eee}.player:last-child{border:0}.name{font-weight:650}.meta{font-size:12px;color:#6b7280}.price{font-weight:700}
+.player{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid #eee;gap:10px}.player:last-child{border:0}.name{font-weight:650}.meta{font-size:12px;color:#6b7280}.price{font-weight:700;white-space:nowrap}
+.player.baja{opacity:.55}
 .status{padding:6px 9px;border-radius:99px;background:#dcfce7;color:#166534;font-size:12px;font-weight:700}
 .error{background:#fee2e2;color:#991b1b}.muted{color:#6b7280;font-size:12px}
+.right{display:flex;flex-direction:column;align-items:flex-end;gap:4px}
+.bajabtn{border:1px solid #d1d5db;border-radius:99px;padding:3px 10px;font-size:11px;font-weight:700;background:#fff;color:#6b7280;width:auto;margin:0}
+.bajabtn.on{background:#fee2e2;color:#991b1b;border-color:#fecaca}
 </style></head><body>
 <header><h1>🏀 SuperManager ACB</h1><div class="sub">Jornada <span id="j">-</span> · <span id="n">-</span> jugadores</div></header>
 <main>
@@ -25,7 +29,24 @@ async function load(){
 }
 function render(d){
  $('j').textContent=d.jornada??'-';$('n').textContent=d.players.length;
- $('list').innerHTML=d.players.slice(0,30).map(p=>`<div class="player"><div><div class="name">${esc(p.name)}</div><div class="meta">${p.position} · ${esc(p.team||'')} · +15 ${p.sm_plus15??'-'}</div></div><div class="price">${p.price?.toLocaleString('es-ES')??'-'} €</div></div>`).join('');
+ $('list').innerHTML=d.players.slice(0,30).map(p=>{
+   const baja = !!p.de_baja;
+   const key = esc(p.name)+'|'+esc(p.team||'');
+   return `<div class="player ${baja?'baja':''}">
+     <div><div class="name">${esc(p.name)}</div><div class="meta">${p.position} · ${esc(p.team||'')} · +15 ${p.sm_plus15??'-'}${p.valoracion_media!=null?(' · media '+p.valoracion_media):''}</div></div>
+     <div class="right">
+       <div class="price">${p.price?.toLocaleString('es-ES')??'-'} €</div>
+       <button class="bajabtn ${baja?'on':''}" onclick="toggleBaja('${escJs(p.name)}','${escJs(p.team||'')}',${baja?'false':'true'})">${baja?'BAJA ✕':'Marcar baja'}</button>
+     </div>
+   </div>`;
+ }).join('');
+}
+async function toggleBaja(name,team,nuevoValor){
+ try{
+   await fetch('/api/bajas',{method:'POST',headers:{'Content-Type':'application/json'},
+     body:JSON.stringify({name,team,baja:nuevoValor})});
+   load();
+ }catch(e){alert('No se pudo actualizar la baja: '+e.message)}
 }
 async function refresh(){
  $('st').textContent='ACTUALIZANDO';$('st').className='status';$('msg').textContent='Consultando El Rincón y validando el universo...';
@@ -34,5 +55,6 @@ async function refresh(){
  }catch(e){$('st').textContent='ERROR';$('st').className='status error';$('msg').textContent=e.message}
 }
 function esc(x){return String(x).replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]))}
+function escJs(x){return String(x).replace(/\\/g,'\\\\').replace(/'/g,"\\'")}
 load();
 </script></body></html>
